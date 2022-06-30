@@ -1,0 +1,128 @@
+
+
+```{r setup}
+#BE SURE TO INSTALL ALL PACKAGES BEFORE LEAVING FOR THE FIELD!
+
+#install required packages
+#need to install perl if on windows http://strawberryperl.com/
+#install.packages("exifr")
+#install.packages("skimr")
+#install.packages("magick")
+#install.packages("htmlTable")
+#etc...
+
+# 1. Call the necessary packages
+library(exifr)
+library(tidyverse)
+library(lubridate)
+library(skimr)
+library(stringr)
+library(magick)
+library(htmlTable)
+
+# 2. Save this script in the same folder as the images to inspect and then check the working directory matches
+#    Alternatively assign a working directory ie. wd=  "C:/Users/etc"
+wd<-getwd()
+
+# 3. Place all photos of a single site in a folder and call it by the site name 
+#    Here we have two sites, "complete" and "incomplete"
+#    Compare the differences by changing the below site name
+#    Set the image_location value - ie. where your images are stored
+site = "incomplete"
+image_location = file.path(wd,"practiceimagery",site)
+
+
+# 4. List the files available in that folder that have the ending ".JPG"
+files<- list.files(image_location,pattern = "*.JPG", full.names = TRUE)
+
+
+# 5. Extract the data we want from each file
+dat <- exifr::read_exif(files, tags = c("SourceFile", "FileName", "DateTimeOriginal",
+                                        "GPSLongitude", "GPSLatitude")) %>% 
+  mutate("ID" = site) %>%
+  separate(DateTimeOriginal, c("Date","Time"), sep=" ")
+
+# 6. Save the csv to visualise in a GIS software
+#write.csv(dat,paste0(site,"complete.csv"))
+
+# 7. Or/ visualise the extracted latitudes and longitudes of each site here
+plot <- dat %>%
+  ggplot() +
+  geom_point(aes(x=GPSLatitude, y=GPSLongitude)) +
+  theme_classic()
+plot
+
+# See the chunks of missing photos in the incomplete set of imagery!? 
+# Quick - you better fly this site again if you want a decent orthomosaic! :)
+
+#######################################
+#### Are the images any good...??? ####
+#######################################
+
+# What if you have all your photos, but they are blurry?
+# Lets check this...
+
+# 1. This time we'll work with the complete set of imagery. No point working with an incomplete data set!
+# As before choose your site, and specify the image_location
+site = "complete"
+image_location = file.path(wd,"practiceimagery",site)
+
+# 2. We will choose a proportion of images to analyse for bluriness in the dataset_sampling_factor. Set to "1" for all, or reduce to save time.
+dataset_sampling_factor = 0.1 
+
+# 3. While we're here we'll also specify the number of images to inspect for bluriness. These will be the most blurry files. Smooth surfaces (water and bare ground) may have a lower variance value than blurry textured images, so use the rank table and adjust this number to look around until you are happy. We'll also include a warning_number to prevent opening too many images automatically. Opening too many might slow down computer!
+number_of_images_to_open = 2 
+warning_number = 10 
+
+#4. As above, list the files available in that folder that have the ending ".JPG"
+#   Adjust between the " " to locate the folders where your images are saved
+#   And separate the image name
+files<- list.files(image_location,pattern = "*.JPG", full.names = TRUE) %>%
+  setNames(., sub("\\(?i).JPG$", "", basename(.))) 
+
+#5. Because we might be in the field and short of time - lets only check a proportion of the images available as a sample of our dataset, specified by the dataset_sampling_factor.
+image_files <- files %>% 
+  sample(size = length(files)*dataset_sampling_factor, replace = FALSE) %>%
+  map(image_read)
+
+#6. Define the calculation to be executed on each image to determine edge blurring of pixels
+laplacian_kernel = matrix(c(0,1,0, 1,-4,1, 0,1,0), nrow = 3, ncol = 3)
+
+#7. Create function to calculate variance of each greyscale image and apply the function on the sample of images in the folder
+compute_laplacian_variance <- function(image_file) {
+  image_file %>% 
+    image_channel(channel = "lightness") %>%
+    image_convolve(laplacian_kernel)  %>% 
+    image_data() %>% 
+    var()
+}
+laplacian_variance_result <- map(image_files, compute_laplacian_variance)
+
+#8. Rank the images from blurriest to least blurry, and return a table with hyperlinks to inspect the blurriest images 
+result_table <- laplacian_variance_result %>%
+  bind_rows() %>%
+  pivot_longer(names_to = "image_name", cols = everything()) %>%
+  arrange(value) %>%
+  mutate(variance_value = round(value, digits = 1))
+
+#9. If on a windows operating system run this code to inspect the images
+result_table %>%
+  transform(image_link = paste('<a href = ', shQuote(file.path(image_location, image_name)), '>', image_name, '</a>')) %>%
+select(image_link, variance_value) %>%
+rename(if_on_a_windows_machine_right_click_then_open_link_in_browser = image_link) %>%
+ htmlTable()
+
+#OR/. If on a mac run this code to inspect the images
+to_open_in_file_browser <- result_table %>%
+slice_head(n = number_of_images_to_open) %>%
+transform(image_file_path = file.path(image_location, image_name)) %>%
+pull(image_file_path)
+
+ifelse(length(to_open_in_file_browser) > warning_number,
+  print("That is a lot of images. You can allow this by altering the warning_number parameter."), # This is a safety catch to prevent accidentally opening hundreds of files, which would likely be unintended and annoying
+  lapply(to_open_in_file_browser, browseURL)
+ )
+
+#10. Decide if you are happy with the image quality, and if not, fly again now while you still have the chance! :)
+```
+
